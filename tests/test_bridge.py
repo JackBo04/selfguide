@@ -91,4 +91,41 @@ class MailboxTest(unittest.TestCase):
   c['file']['sha256']='incorrect'
   with self.assertRaises(ValueError):bridge.validate(c,self.cfg)
 
+ def test_cross_task_marker_rejected_before_queue(self):
+  def text(task,round=1):
+   return f'SELFGUIDE_REPLY_BEGIN task={task} round={round}\nbody\nSELFGUIDE_REPLY_END task={task} round={round}'
+  command={'action':'send','session':'task-a','expected_url':self.cfg['project_url'],'text':text('task-b')}
+  for action in ['compose','send','reply','reply-status']:
+   command['action']=action
+   status,result=self.rpc('/command',{'id':uuid.uuid4().hex,'command':command})
+   self.assertEqual(status,400);self.assertIn('markers',result['error'])
+  with bridge.database() as db:self.assertEqual(db.execute('SELECT count(*) FROM jobs').fetchone()[0],0)
+  command['text']=text('task-b')+'\nQuoted previous round above.\n'+text('task-a',2)
+  bridge.validate(command,self.cfg)
+  command['text']=text('task-a').replace('END task=task-a round=1','END task=task-a round=2')
+  with self.assertRaises(ValueError):bridge.validate(command,self.cfg)
+  del command['session']
+  bridge.validate(command,self.cfg)  # Legacy window recovery remains available.
+
+ def test_current_handoff_hash_phase_and_conversation(self):
+  run=Path(self.tmp.name)/'task';run.mkdir()
+  text='the current exact message'
+  state={'id':'task-a','phase':'prepared','conversation_url':None,
+         'rounds':[{'outgoing_sha256':hashlib.sha256(text.encode()).hexdigest()}]}
+  def save(): (run/'state.json').write_text(json.dumps(state))
+  save()
+  command={'action':'compose','session':'task-a','expected_url':self.cfg['project_url'],'text':text}
+  bridge.validate_run(command,run)
+  with self.assertRaises(ValueError):bridge.validate_run({**command,'text':'same task, stale round'},run)
+  with self.assertRaises(ValueError):bridge.validate_run({**command,'session':'task-b'},run)
+  with self.assertRaises(ValueError):bridge.validate_run({**command,'action':'send'},run)
+  state['phase']='send_pending';save();bridge.validate_run({**command,'action':'send'},run)
+  state['phase']='complete';save()
+  for action in ['compose','send','attach']:
+   with self.assertRaises(ValueError):bridge.validate_run({**command,'action':action},run)
+  bridge.validate_run({**command,'action':'reply-status'},run)
+  state['conversation_url']=self.cfg['project_url'].replace('/project','/c/original');save()
+  with self.assertRaises(ValueError):bridge.validate_run({**command,'action':'reply-status'},run)
+  bridge.validate_run({**command,'action':'reply-status','expected_url':state['conversation_url']},run)
+
 if __name__=='__main__':unittest.main()

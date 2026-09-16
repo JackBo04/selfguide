@@ -36,6 +36,27 @@ def lane(command):
     return command.get('session', 'legacy')
 
 
+def validate_run(command, run):
+    """Check local handoff identity before a job or watcher is created."""
+    state = json.loads((run.expanduser().resolve() / 'state.json').read_text())
+    if command.get('session') != state['id']:
+        raise ValueError('Task window does not match --run.')
+    action = command['action']
+    if action in {'compose', 'send', 'attach'}:
+        allowed = {'compose': {'prepared'}, 'send': {'send_pending'},
+                   'attach': {'ready', 'executing', 'prepared'}}[action]
+        if state.get('phase') not in allowed:
+            raise ValueError(f"Cannot {action} in task phase {state.get('phase')}; inspect the current handoff first.")
+    if action in {'compose', 'send', 'reply', 'reply-status'}:
+        current = state.get('rounds', [])[-1:]
+        digest = hashlib.sha256(command['text'].encode()).hexdigest()
+        if not current or current[0].get('outgoing_sha256') != digest:
+            raise ValueError('Message does not match this task\'s current prepared handoff; use its outgoing file.')
+    if action in {'compose', 'send', 'attach', 'reply', 'reply-status'} and state.get('conversation_url'):
+        if command.get('expected_url') != state['conversation_url']:
+            raise ValueError('Expected URL does not match this task\'s saved conversation.')
+
+
 def project_key(url):
     p = urlsplit(url)
     if p.scheme != 'https' or p.netloc != 'chatgpt.com' or p.query or p.fragment:
@@ -76,6 +97,12 @@ def validate(command, cfg):
     if action in {'compose', 'send', 'reply', 'reply-status'}:
         if not isinstance(command.get('text'), str) or not command['text'].strip() or len(command['text'].encode()) > 65536:
             raise ValueError('Provide nonempty text up to 64 KB.')
+        # The final pair is the current handoff; quoted older rounds may precede it.
+        markers = re.findall(r'^SELFGUIDE_REPLY_(BEGIN|END) task=([A-Za-z0-9_-]+) round=(\d+)\s*$', command['text'], re.M)
+        if command.get('session') and markers:
+            if (len(markers) < 2 or markers[-2][0] != 'BEGIN' or markers[-1][0] != 'END' or
+                    markers[-2][1:] != markers[-1][1:] or markers[-1][1] != command['session']):
+                raise ValueError('Message task/round markers do not match the selected task window.')
     if action == 'attach':
         f = command.get('file', {})
         data = base64.b64decode(f.get('base64', ''), validate=True)
@@ -247,6 +274,8 @@ def main():
             cmd['file'] = {'name': f.name, 'mime': mimetypes.guess_type(f.name)[0] or 'application/octet-stream',
                            'base64': base64.b64encode(data).decode(), 'sha256': hashlib.sha256(data).hexdigest()}
         validate(cmd, config())
+        if args.run:
+            validate_run(cmd, args.run)
         ident = uuid.uuid4().hex
         args.out.parent.mkdir(parents=True, exist_ok=True)
         # Persist the ID before networking. A timeout is never a license to create another send.

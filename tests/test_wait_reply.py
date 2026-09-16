@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -46,13 +47,15 @@ class WaitReplyTest(unittest.TestCase):
         self.assertNotIn('PRIVATE PARTIAL',self.args.out.read_text()+output)
         self.assertTrue(all(body['command']['action']=='reply-status' for route,body in self.calls if route=='/command'))
     def test_resume_cannot_switch_to_another_window(self):
-        task=self.root/'task';task.mkdir();(task/'state.json').write_text(json.dumps({'id':'task-a'}))
+        task=self.root/'task';task.mkdir()
+        state={'id':'task-a','rounds':[{'outgoing_sha256':hashlib.sha256(self.prompt.read_bytes()).hexdigest()}]}
+        (task/'state.json').write_text(json.dumps(state))
         self.args.run=task
         self.assertEqual(self.call({'status':'waiting','reason':'generating'})[0],3)
         commands=[body['command'] for route,body in self.calls if route=='/command']
         self.assertTrue(commands);self.assertTrue(all(c['session']=='task-a' for c in commands))
         self.args.resume=True
-        (task/'state.json').write_text(json.dumps({'id':'task-b'}))
+        state['id']='task-b';(task/'state.json').write_text(json.dumps(state))
         with self.assertRaises(ValueError):self.call({})
     def test_blocked_page_has_diagnostic_but_no_reply(self):
         self.assertEqual(self.call({'status':'blocked','code':'page_unavailable','error':'login','screenshot_recommended':True})[0],2)

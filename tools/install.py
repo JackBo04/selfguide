@@ -104,7 +104,7 @@ def main():
     if a.variant == 'server':
         print('If runtime/server-browser/package-lock.json changed, run npm ci in runtime/server-browser. Keep the logged-in browser running.')
     else:
-        print('To update the desktop extension, replace files in its existing extension folder, reload it and refresh the bound tab after pending work is resolved.')
+        print('After pending operations finish, replace the desktop extension files and reload the extension. Its next command reconnects existing tabs without refreshing them.')
 
 
 if __name__ == '__main__':

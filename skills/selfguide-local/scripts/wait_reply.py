@@ -39,6 +39,8 @@ def run(args):
     if session:
         command['session'] = session
     bridge.validate(command, bridge.config())
+    if session:
+        bridge.validate_run(command, args.run)
     if '/c/' not in args.expect_url:
         raise ValueError('Wait only in the confirmed task conversation, not a project landing page.')
     reply = args.reply_out.resolve()

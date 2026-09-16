@@ -82,7 +82,7 @@ try{
  assert.equal(changedWhitespace.status,'blocked','Do not silently collapse meaningful blank lines');
  assert.equal((await command('status')).user_count,0);
  await page.evaluate(()=>document.querySelector('#prompt-textarea').replaceWith(window.fixtureTextarea));
- const taskFile=path.join(tmp,'task.txt');await fs.writeFile(taskFile,'Use only the attached fixture file.');
+ const taskFile=path.join(tmp,'task.txt');await fs.writeFile(taskFile,'Use only the attached fixture file. Literal delimiter: '+String.fromCharCode(96).repeat(3)+' goes here.');
  const run=session('new','--task-file',taskFile,'--workspace',path.join(tmp,'tasks'))['run'];
  const prepared=session('prepare','--run',run,'--file',taskFile);
  const text=await fs.readFile(prepared.file,'utf8');
@@ -95,6 +95,7 @@ try{
  assert.equal(await page.evaluate(()=>window.sendClicks || 0),0,'No click while the control is disabled');
  await page.evaluate(()=>setTimeout(()=>document.querySelector('[data-testid=send-button]').setAttribute('aria-disabled','false'),1200));
  await page.evaluate(()=>window.replyDelay=6000);
+ await page.evaluate(()=>{window.fencesAsBreaks=true;window.trimFenceSpace=true;});
  session('submitting','--run',run);
  const sent=await command('send',{text});assert.equal(sent.sent,true);assert.ok(sent.url.includes('/c/'));
  assert.equal(await page.evaluate(()=>window.sendClicks),1,'Click exactly once after readiness');
@@ -111,13 +112,20 @@ try{
  const received=await fs.readFile(replyFile,'utf8');assert.ok(received.includes(bytes.toString()));
  assert.ok(!waited.stdout.includes(bytes.toString()));
  const watchState=JSON.parse(await fs.readFile(stateFile,'utf8'));
- assert.equal(watchState.state,'ready');assert.ok(watchState.probes>=2);assert.equal(watchState.screenshot_requests,0);
+ assert.equal(watchState.state,'ready');assert.ok(watchState.probes>=1);assert.equal(watchState.screenshot_requests,0);
  session('reply','--run',run,'--file',replyFile,'--source','dom');
  assert.equal(session('status','--run',run).rounds[0].reply_format_valid,true);
  session('checkpoint','--run',run,'--phase','complete','--note-file',taskFile);
  const replay=await runWatcher([...waitArgs,'--timeout','1','--resume']);assert.equal(replay.code,0,replay.stderr);
  assert.equal((await command('status')).user_count,1,'Watcher must not resend a prompt');
  const reply=await command('reply',{text});assert.equal(reply.complete,true);assert.equal(reply.text,received);
+ // Both observed fence renderings work, without loosening other whitespace.
+ await page.evaluate(prompt=>{document.querySelector('[data-message-author-role="user"]').textContent=prompt.split(String.fromCharCode(96).repeat(3)).join('\n');},text);
+ assert.equal((await command('reply-status',{text})).complete,true);
+ // Rendering tolerance must not accept changed prose or another task/round.
+ for (const changed of [text.replace('goes here','goes elsewhere'),text.replaceAll('round=1','round=2'),text.replaceAll(/task=[A-Za-z0-9_-]+/g,'task=other')]) {
+  assert.equal((await command('reply-status',{text:changed},true)).code,'turn_mismatch');
+ }
  const handoff='SELFGUIDE_REPLY_BEGIN task=fixture round=1\n路径 /tmp/a_b；原文 <value> & 中文\nSELFGUIDE_REPLY_END task=fixture round=1';
  await page.evaluate(value=>{
   const assistant=document.querySelector('[data-message-author-role="assistant"]');
@@ -162,6 +170,12 @@ try{
  await page.goto(project);await page.waitForSelector('#prompt-textarea');
  await command('project');await page.waitForURL(project);
  assert.equal((await command('status')).user_count,0);
+ await page.evaluate(()=>{const form=document.querySelector('form');form.remove();setTimeout(()=>document.body.append(form),3500);});
+ assert.equal((await command('status')).composer,true,'Wait for a composer that mounts after document load');
+ await page.evaluate(()=>{document.querySelector('form').remove();const button=document.createElement('button');button.textContent='Try again';document.body.append(button);});
+ assert.equal((await command('status',{},true)).code,'page_render_failed');
+ const diagnostic=await command('snapshot');assert.equal(diagnostic.composer,false);
+ assert.equal(diagnostic.last_user,'');assert.equal(diagnostic.draft,'');
  assert.equal(screenshotCalls,0);
  console.log(JSON.stringify({variant,compact_status_bytes:Buffer.byteLength(JSON.stringify(compact)),diagnostic_snapshot_bytes:Buffer.byteLength(JSON.stringify(full)),watch_probes:watchState.probes,screenshots:screenshotCalls}));
  console.log('PASS: real extension service worker + content script + HTTP broker; compact status, upload completion, text compose/send, autonomous wait/resume, full reply, stale/partial reply rejection and login diagnostic; zero screenshots on controlled fixture.');

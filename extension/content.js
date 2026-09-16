@@ -6,7 +6,7 @@
   const editor = () => [...document.querySelectorAll('#prompt-textarea,textarea[data-testid="prompt-textarea"],div[contenteditable="true"][role="textbox"]')].find(visible);
   const userMessages = () => [...document.querySelectorAll('[data-message-author-role="user"]')];
   const assistantMessages = () => [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-  const text = el => el ? ('value' in el ? el.value : el.innerText) : '';
+  const text = el => el ? (/^(TEXTAREA|INPUT)$/.test(el.tagName) ? el.value : el.innerText) : '';
   function draftText(el) {
     // ProseMirror paragraphs have CSS margins: innerText invents extra newlines.
     // Recover logical paragraph/BR boundaries without collapsing real blank lines.
@@ -25,8 +25,26 @@
     // The sent bubble may collapse blank paragraphs. The composer still requires
     // the exact original draft; this fallback only compares the rendered message.
     const rendered = value => norm(value).replace(/\n{2,}/g,'\n');
-    return !!content && (norm(text(content)) === norm(expected) || norm(content.textContent || '') === norm(expected) ||
-      rendered(text(content)) === rendered(expected) || rendered(content.textContent || '') === rendered(expected));
+    if (!content) return false;
+    const values = [text(content), content.textContent || ''];
+    if (values.some(value => rendered(value) === rendered(expected))) return true;
+    // ChatGPT can render a literal triple-backtick run as a line break. Accept
+    // only that observed transformation, with the same task/round markers and
+    // all remaining text intact. Never relax the composer comparison.
+    const markers = value => [...value.matchAll(/^SELFGUIDE_REPLY_(BEGIN|END) task=([A-Za-z0-9_-]+) round=(\d+)[ \t]*$/gm)];
+    const pair = markers(expected).slice(-2);
+    if (pair.length !== 2 || pair[0][1] !== 'BEGIN' || pair[1][1] !== 'END' ||
+        pair[0][2] !== pair[1][2] || pair[0][3] !== pair[1][3]) return false;
+    const fencesAsBreaks = [
+      rendered(expected.replace(/(?<!`)```(?!`)/g,'\n')),
+      // A fence rendered as a block boundary can also consume its following
+      // horizontal whitespace. Do not strip indentation anywhere else.
+      rendered(expected.replace(/(?<!`)```(?!`)[ \t]*/g,'\n'))
+    ];
+    return values.some(value => {
+      const actual = markers(value).slice(-2);
+      return actual.length === 2 && actual.every((mark,i)=>mark[0] === pair[i][0]) && fencesAsBreaks.includes(rendered(value));
+    });
   };
   const button = selectors => [...document.querySelectorAll(selectors)].find(visible);
   const stop = () => button('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="停止生成"]');
@@ -49,6 +67,7 @@
   function fault(code, message) {
     return Object.assign(new Error(message), {code});
   }
+  const retryPage = () => [...document.querySelectorAll('button')].some(el=>visible(el) && /^(Try again|Retry|重试|再试一次)$/i.test(text(el).trim()));
   function compact() {
     const e = editor();
     const labels = [...document.querySelectorAll('button,[role="button"]')].filter(visible)
@@ -58,10 +77,15 @@
       attachments:attachments(),thinking_label:labels.length === 1 ? labels[0] : null,
       notices:[...document.querySelectorAll('[role="alert"]')].filter(visible).map(el=>text(el).slice(0,300)).slice(-3)};
   }
-  function requirePage(command) {
+  function requirePage(command, needsEditor = true) {
     if (location.origin !== 'https://chatgpt.com' || location.search || location.hash ||
         (command.expected_url && location.href !== command.expected_url)) throw fault('wrong_page','页面地址不符，未执行。');
-    if (!editor()) throw fault('page_unavailable','没有找到聊天输入框；可能需要手动登录、验证或适配网页。');
+    if (needsEditor && !editor()) {
+      const retry = retryPage();
+      throw fault(retry ? 'page_render_failed' : 'page_unavailable', retry
+        ? '网页显示重试页面且没有输入框；核对本任务发送状态后仅恢复本窗口，不要改用其他任务窗口。'
+        : '没有找到聊天输入框；可能需要手动登录、验证或适配网页。');
+    }
   }
   function replyCandidate(command) {
     requirePage(command);
@@ -90,7 +114,15 @@
       ...(handoffs.length === 1 ? {handoff_text:handoffs[0]} : {})};
   }
   async function run(command) {
-    requirePage(command);
+    // A completed document can still be mounting the chat composer. Wait in
+    // this one operation, without screenshots or another agent-driven probe.
+    requirePage(command, false);
+    const readyDeadline = Date.now() + 10000;
+    while (command.action !== 'snapshot' && !editor() && !retryPage() && Date.now() < readyDeadline) {
+      await pause(250);
+      requirePage(command, false);
+    }
+    requirePage(command, command.action !== 'snapshot');
     const e = editor();
     if (command.action === 'status') return compact();
     if (command.action === 'snapshot') return snapshot(); // Explicit diagnostic only.

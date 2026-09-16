@@ -28,6 +28,17 @@ async function binding(session, cfg) {
   if (session === 'legacy') return {tabId:cfg.tabId};
   return (await chrome.storage.local.get(SESSION + session))[SESSION + session];
 }
+async function pageCommand(tabId, message) {
+  try { return await chrome.tabs.sendMessage(tabId, message); }
+  catch (error) {
+    // Reloading the extension removes its old page listeners. Reattach without
+    // refreshing a user's draft or generation. Only "no receiver" proves that
+    // no command ran; a closed response port must never retry a mutation.
+    if (!String(error.message).includes('Receiving end does not exist')) throw error;
+    await chrome.scripting.executeScript({target:{tabId},files:['content.js']});
+    return chrome.tabs.sendMessage(tabId, message);
+  }
+}
 async function taskTab(session, cfg, info) {
   const saved = await binding(session, cfg);
   if (!saved || (session !== 'legacy' && saved.state !== 'ready') || saved.tabId === undefined) throw fault('session_not_open','该任务尚无已确认窗口；先 open --run，不能借用其他任务窗口。');
@@ -106,13 +117,13 @@ async function execute(cfg, info, job) {
         result = {status:'waiting',reason:'page_loading'};
       } else if (job.command.action === 'project') {
         if (session !== 'legacy') throw Error('任务窗口保留原会话；新任务请使用新的任务 ID。');
-        const state = await chrome.tabs.sendMessage(tab.id,{type:'selfguide-command',id:job.id,
+        const state = await pageCommand(tab.id,{type:'selfguide-command',id:job.id,
           command:{action:'status',expected_url:cleanURL(tab.url)}});
         if (state.error || state.generating || state.draft_present || state.attachments?.length) throw Error('当前页面有生成、草稿或附件，请先处理。');
         await chrome.tabs.update(tab.id,{url:job.project_url});
         result = {navigated:true,url:job.project_url,next:'Read compact status until the composer is ready.'};
       } else {
-        result = await chrome.tabs.sendMessage(tab.id,{type:'selfguide-command',id:job.id,command:job.command});
+        result = await pageCommand(tab.id,{type:'selfguide-command',id:job.id,command:job.command});
       }
     }
   } catch (error) {
