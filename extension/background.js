@@ -2,6 +2,7 @@
 const active = new Set();
 let pumping = false;
 let layoutQueue = Promise.resolve();
+let closeQueue = Promise.resolve();
 let ticker;
 function startPolling() { if (!ticker) ticker = setInterval(()=>void poll(),2000); }
 const MAX_ACTIVE = 4;
@@ -106,6 +107,37 @@ async function execute(cfg, info, job) {
   try {
     if (job.command.action === 'open') {
       result = await openWindow(job.command, cfg, info, job.id);
+    } else if (job.command.action === 'close') {
+      const close = async () => {
+        const key = SESSION + session, saved = await binding(session,cfg);
+        if (!saved || saved.state === 'closed') {
+          result = {closed:true,already_closed:true,session};
+        } else {
+          let tab;
+          try { tab = await taskTab(session,cfg,info); }
+          catch (error) {
+            if (error.code !== 'window_closed') throw error;
+          }
+          if (tab) {
+            if (tab.status === 'loading') throw fault('window_busy','任务页面仍在加载，保留窗口。');
+            const state = await pageCommand(tab.id,{type:'selfguide-command',id:job.id,command:job.command});
+            if (!state.close_ready) throw fault(state.code || 'window_busy',state.error || '窗口尚未确认可关闭。');
+            const current = await chrome.tabs.get(tab.id);
+            if (current.url !== job.command.expected_url || current.windowId !== saved.windowId) throw fault('window_changed','窗口地址或归属已改变，保留窗口。');
+            const windows = await chrome.windows.getAll({windowTypes:['normal']});
+            if (windows.length === 1 && (await chrome.tabs.query({windowId:current.windowId})).length === 1) {
+              throw fault('last_browser_window','保留最后一个浏览器窗口，让连接继续运行。');
+            }
+            // Remove only this task's tab. Other tabs manually added to its window survive.
+            await chrome.tabs.remove(tab.id);
+          }
+          await chrome.storage.local.set({[key]:{state:'closed',url:job.command.expected_url,closedAt:Date.now()}});
+          result = {closed:true,already_closed:!tab,session};
+        }
+      };
+      // Serialize the final-window check and removal across task lanes.
+      closeQueue = closeQueue.catch(()=>{}).then(close);
+      await closeQueue;
     } else {
       const tab = await taskTab(session, cfg, info);
       if (job.command.action === 'focus') {

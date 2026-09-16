@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Record handoffs before browser actions so uncertain sends are never retried blindly."""
 import argparse
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -96,7 +97,7 @@ def main():
         print(json.dumps({'run': str(run), 'project_url': project['url']}))
         return
     run = args.run.resolve()
-    with (run / '.state.lock').open('w') as lock:
+    with (run / '.state.lock').open('w') as lock, ExitStack() as held:
         fcntl.flock(lock, fcntl.LOCK_EX)
         path = run / 'state.json'
         state = json.loads(path.read_text())
@@ -114,8 +115,8 @@ def main():
                 result['run'] = str(run)
                 print(json.dumps(result, ensure_ascii=False)); return
             print(json.dumps(state, ensure_ascii=False, indent=2)); return
-        if state['phase'] == 'complete':
-            raise ValueError('This task is complete; create a new task record for new work.')
+        if state['phase'] == 'complete' and args.action != 'resume':
+            raise ValueError('This task is complete; resume it to continue the same conversation, or create a new task.')
         if args.action == 'stage':
             if state['phase'] not in ['ready', 'executing']:
                 raise ValueError('Stage attachments before preparing the next message.')
@@ -209,13 +210,29 @@ def main():
             state['phase'] = args.phase
             state['latest_note'] = name
         elif args.action == 'resume':
-            if state['phase'] not in ['paused', 'waiting_user'] or 'resume_phase' not in state:
-                raise ValueError('Only a paused task can be resumed.')
-            state['phase'] = state.pop('resume_phase')
+            if state['phase'] == 'complete':
+                checks = run / 'checks'; checks.mkdir(exist_ok=True)
+                cleanup_lock = held.enter_context((checks / 'window-cleanup.lock').open('a'))
+                fcntl.flock(cleanup_lock, fcntl.LOCK_EX)
+                from cleanup_windows import require_settled
+                require_settled(run)
+                state['phase'] = 'executing'
+                result['restore_url'] = state['conversation_url']
+            else:
+                if state['phase'] not in ['paused', 'waiting_user'] or 'resume_phase' not in state:
+                    raise ValueError('Only a paused or completed task can be resumed.')
+                state['phase'] = state.pop('resume_phase')
         state['updated_at'] = now()
         state['events'].append({'at': state['updated_at'], 'action': args.action, 'phase': state['phase'], 'round': state['round']})
         save(path, state)
         result['phase'] = state['phase']
+        if args.action == 'checkpoint' and state['phase'] == 'complete':
+            try:
+                from cleanup_windows import enqueue
+                result['window_cleanup'] = enqueue(run, recheck=True)
+            except Exception as error:
+                # Completion remains recorded even when the browser is offline.
+                result['window_cleanup'] = {'status': 'deferred', 'reason': type(error).__name__}
         print(json.dumps(result))
 
 if __name__ == '__main__':

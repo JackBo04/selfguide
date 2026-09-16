@@ -114,6 +114,15 @@ try {
   session('reply','--run',t.run,'--file',path.join(t.run,'feedback/dom.txt'),'--source','dom');
  }
  const crossed=await command(a,'status',{expected_url:b.url},true);assert.equal(crossed.code,'wrong_page');
+ // Even a completed-task cleanup request cannot discard browser-side work.
+ await b.page.locator('#prompt-textarea').fill('KEEP THIS DRAFT');
+ assert.equal((await command(b,'close',{text:b.text},true)).code,'window_busy');
+ assert.equal(await b.page.locator('#prompt-textarea').inputValue(),'KEEP THIS DRAFT');
+ await b.page.locator('#prompt-textarea').fill('');
+ await b.page.evaluate(()=>{const stop=document.createElement('button');stop.dataset.testid='stop-button';document.body.append(stop);});
+ assert.equal((await command(b,'close',{text:b.text},true)).code,'window_busy');
+ await b.page.locator('[data-testid=stop-button]').evaluate(el=>el.remove());
+ assert.equal((await command(b,'close',{text:'Changed text\n'+b.text},true)).code,'turn_mismatch');
  // Simulate a browser restart: stale tab IDs cannot silently take over a new task.
  await worker.evaluate(async id=>{const key='selfguide.session.'+id;const saved=await chrome.storage.local.get(key);await chrome.storage.local.set({[key]:{...saved[key],state:'restart_unverified'}});},a.id);
  assert.equal((await command(a,'status',{},true)).code,'session_not_open');
@@ -125,6 +134,38 @@ try {
  assert.equal(restored.url,b.url);assert.notEqual(restored.tab_id,b.tab);
  b.page=await restoredPage;await b.page.goto(b.url);await b.page.waitForSelector('#prompt-textarea');
  assert.equal((await command(b,'status')).composer,true);
+ // Restored fixture represents the saved conversation after its page reload.
+ await b.page.evaluate(text=>{const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=text;document.querySelector('main').append(user);},b.text);
+ const extra=await worker.evaluate(windowId=>chrome.tabs.create({windowId,url:'about:blank',active:false}),restored.window_id);
+ const closed=b.page.waitForEvent('close');
+ const completion=session('checkpoint','--run',b.run,'--phase','complete','--note-file',path.join(b.run,'task.txt'));
+ assert.equal(completion.window_cleanup.status,'queued');
+ await closed;
+ for(let n=0;n<100;n++){
+  const job=await rpc('/job',{id:completion.window_cleanup.id});
+  if(job.state==='done'){assert.equal(job.result.closed,true);break;}
+  if(n===99)throw Error('Automatic close did not finish recording its result');
+  await wait(100);
+ }
+ assert.ok(await worker.evaluate(id=>chrome.tabs.get(id),extra.id),'Manual extra tab must survive task cleanup');
+ assert.equal((await command(b,'close',{text:b.text})).already_closed,true);
+ const resumed=session('resume','--run',b.run);
+ assert.equal(resumed.phase,'executing');assert.equal(resumed.restore_url,b.url);
+ const reopenedPage=context.waitForEvent('page');
+ const reopened=await command(b,'open',{restore:true});assert.equal(reopened.url,b.url);
+ b.page=await reopenedPage;await b.page.goto(b.url);await b.page.waitForSelector('#prompt-textarea');
+ await b.page.evaluate(()=>{window.conversationId='beta';});
+ const next=session('prepare','--run',b.run,'--file',path.join(b.run,'task.txt'));
+ b.prompt=next.file;b.text=await fs.readFile(next.file,'utf8');
+ await command(b,'compose',{text:b.text});session('submitting','--run',b.run);
+ const continued=await command(b,'send',{text:b.text});assert.equal(continued.url,b.url);
+ session('sent','--run',b.run,'--url',continued.url);
+ assert.equal(session('status','--run',b.run).round,2,'Continue rounds in the original task');
+ // Wait for the fixture response without changing the active task's identity.
+ while(await b.page.locator('[data-testid=stop-button]').count())await wait(100);
+ const continuedReply=await command(b,'reply',{text:b.text});
+ const continuedFile=path.join(b.run,'feedback/continued.txt');await fs.writeFile(continuedFile,continuedReply.handoff_text || continuedReply.text);
+ session('reply','--run',b.run,'--file',continuedFile,'--source','dom');
  assert.equal(await worker.evaluate(()=>globalThis.droppedResults.size),2);
  const c=await newTask('gamma');assert.equal((await command(c,'status')).composer,true);
  assert.equal(await legacy.locator('#prompt-textarea').inputValue(),'KEEP THE ORIGINAL DRAFT');
@@ -135,6 +176,18 @@ try {
  const openedAt=Date.now(),d=await newTask('delta');
  assert.ok(Date.now()-openedAt<12000,'Opening a task should not wait for the fallback alarm');
  assert.equal((await command(d,'status')).composer,true);
+ // Preserve one browser window so the extension can accept future tasks.
+ await d.page.evaluate(text=>{const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=text;document.querySelector('main').append(user);},d.text);
+ const finalPage=context.waitForEvent('page');
+ const finalB=await command(b,'open',{restore:true});b.page=await finalPage;
+ await b.page.goto(b.url);await b.page.waitForSelector('#prompt-textarea');
+ await b.page.evaluate(text=>{const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=text;document.querySelector('main').append(user);},b.text);
+ await worker.evaluate(async keep=>{
+  for(const w of await chrome.windows.getAll({windowTypes:['normal']}))if(!keep.includes(w.id))await chrome.windows.remove(w.id);
+ },[d.window,finalB.window_id]);
+ const lastTwo=await Promise.all([command(d,'close',{text:d.text},true),command(b,'close',{text:b.text},true)]);
+ assert.equal(lastTwo.filter(r=>r.closed).length,1,'Concurrent closes must retain one window');
+ assert.equal(lastTwo.filter(r=>r.code==='last_browser_window').length,1);
  console.log(JSON.stringify({variant,independent_tasks:4,parallel_replies:2,closed_window_restored:true,lost_acknowledgements_recovered:2,other_task_finished_while_first_generating:true,legacy_draft_preserved:true,collapsed_messages:true,open_without_page_heartbeat:true}));
  console.log('PASS: independent windows, scoped mutations, exact attachment/reply routing, watcher task binding, closed/stale window isolation.');
 } finally {

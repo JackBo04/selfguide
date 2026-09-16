@@ -126,6 +126,12 @@
     const e = editor();
     if (command.action === 'status') return compact();
     if (command.action === 'snapshot') return snapshot(); // Explicit diagnostic only.
+    if (command.action === 'close') {
+      const state = compact();
+      if (state.generating || state.draft_present || state.attachments.length) throw fault('window_busy','任务窗口有生成、草稿或附件，保留窗口。');
+      if (!userMatches(userMessages().at(-1),command.text || '')) throw fault('turn_mismatch','窗口中最新消息与已完成任务不同，保留窗口。');
+      return {close_ready:true,url:state.url};
+    }
     if (command.action === 'reply' || command.action === 'reply-status') return readReply(command);
     if (stop()) throw Error('当前回复仍在生成。');
     if (command.action === 'compose') {

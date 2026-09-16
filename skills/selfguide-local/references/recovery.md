@@ -11,3 +11,5 @@
 登录、人机验证由用户处理，不改变指纹或绕过验证。DOM 结构可能变化，联调成功不代表实站可靠或避免风控。
 
 窗口关闭或重启后绑定未确认时，用 `bridge.py open --run <run> --restore --out <检查文件>` 恢复已登记的会话地址。首次发送尚未确认时先处理原 job；不借用其他任务窗口。旧任务未使用 `--run` 的待收回复继续沿用原 watcher 参数；该轮完成后才能用 `open --run` 为原会话创建专用窗口。
+
+继续已完成任务：先 `session.py resume --run <run>`，再 `bridge.py open --run <run> --restore --out <新检查文件>`；沿用原会话 URL、任务 ID 和轮次。若关闭 job 尚未结束，先等原 job 完成再恢复，不另建任务。

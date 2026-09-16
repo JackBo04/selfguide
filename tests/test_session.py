@@ -32,6 +32,7 @@ class SessionTest(unittest.TestCase):
     call('stage','--run',run,'--file',source,ok=False)
     call('prepare','--run',run,'--file',task);call('submitting','--run',run)
     call('prepare','--run',run,'--file',task,ok=False)
+
     call('sent','--run',run,'--url','https://chatgpt.com/c/wrong',ok=False)
     call('checkpoint','--run',run,'--phase','paused','--note-file',task)
     call('resume','--run',run);self.assertEqual(call('status','--run',run)['phase'],'send_pending')
@@ -75,5 +76,16 @@ class SessionTest(unittest.TestCase):
     self.assertEqual((legacy/'in-001.txt').read_text(),task.read_text())
     call('checkpoint','--run',run,'--phase','complete','--note-file',task)
     call('prepare','--run',run,'--file',task,ok=False)
+
+    # Continuing a completed task keeps its conversation and round history.
+    before=call('status','--run',run)
+    resumed=call('resume','--run',run)
+    self.assertEqual(resumed['phase'],'executing')
+    self.assertEqual(resumed['restore_url'],before['conversation_url'])
+    call('prepare','--run',run,'--file',task)
+    after=call('status','--run',run)
+    self.assertEqual(after['id'],before['id'])
+    self.assertEqual(after['conversation_url'],before['conversation_url'])
+    self.assertEqual(after['round'],before['round']+1)
 
 if __name__=='__main__':unittest.main()

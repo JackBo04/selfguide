@@ -27,3 +27,13 @@ python <skill>/scripts/session.py reply --run <run> --file <run>/feedback/copied
 `wait_reply.py` 自行等待完整回复，不需要模型轮询页面。终端每次最多等 55 秒；原进程未结束时保留它，不另启 watcher。正常等待不读状态文件、不截图；超时退出码 3 时用原参数加 `--resume`；退出码 2 时读 [恢复](recovery.md)。
 
 登记成功后读取交接正文一次。完整原文另存为 `copied-001.txt.full.txt`，核对块外内容时再读。完成原任务并取得网页验收后，用 `session.py checkpoint --run <run> --phase complete --note-file <完成说明>` 记录完成。其他参数按需查看对应命令的 `--help`。
+
+任务登记 `complete` 后自动提交窗口清理。仅关闭该任务标签页；有草稿、附件、生成中回复或最新消息不匹配时保留。聊天记录和登录不删除，至少保留一个浏览器窗口维持连接。
+
+清理已有的完成任务（默认只预览，加 `--apply` 执行）：
+
+```bash
+python <skill>/scripts/cleanup_windows.py --workspace <工作区> --apply --wait 30
+```
+
+也可用 `--run <run>` 指定任务。需要查看已关闭的会话时，用 `bridge.py open --run <run> --restore --out <新检查文件>` 重新打开。

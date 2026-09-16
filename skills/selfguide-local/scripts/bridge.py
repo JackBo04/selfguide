@@ -21,7 +21,7 @@ from config_paths import local_home
 
 BASE = Path(os.environ['SELFGUIDE_BRIDGE_HOME']).expanduser() if os.environ.get('SELFGUIDE_BRIDGE_HOME') else local_home()
 LIMIT = 12 * 1024 * 1024
-ACTIONS = {'status', 'snapshot', 'project', 'compose', 'send', 'reply', 'reply-status', 'attach', 'open', 'focus'}
+ACTIONS = {'status', 'snapshot', 'project', 'compose', 'send', 'reply', 'reply-status', 'attach', 'open', 'focus', 'close'}
 MUTATIONS = ACTIONS - {'status', 'snapshot', 'reply', 'reply-status'}
 
 def session_key(run):
@@ -42,17 +42,19 @@ def validate_run(command, run):
     if command.get('session') != state['id']:
         raise ValueError('Task window does not match --run.')
     action = command['action']
+    if action == 'close' and state.get('phase') != 'complete':
+        raise ValueError('Only completed tasks can close their browser window.')
     if action in {'compose', 'send', 'attach'}:
         allowed = {'compose': {'prepared'}, 'send': {'send_pending'},
                    'attach': {'ready', 'executing', 'prepared'}}[action]
         if state.get('phase') not in allowed:
             raise ValueError(f"Cannot {action} in task phase {state.get('phase')}; inspect the current handoff first.")
-    if action in {'compose', 'send', 'reply', 'reply-status'}:
+    if action in {'compose', 'send', 'reply', 'reply-status', 'close'}:
         current = state.get('rounds', [])[-1:]
         digest = hashlib.sha256(command['text'].encode()).hexdigest()
         if not current or current[0].get('outgoing_sha256') != digest:
             raise ValueError('Message does not match this task\'s current prepared handoff; use its outgoing file.')
-    if action in {'compose', 'send', 'attach', 'reply', 'reply-status'} and state.get('conversation_url'):
+    if action in {'compose', 'send', 'attach', 'reply', 'reply-status', 'close'} and state.get('conversation_url'):
         if command.get('expected_url') != state['conversation_url']:
             raise ValueError('Expected URL does not match this task\'s saved conversation.')
 
@@ -84,7 +86,7 @@ def validate(command, cfg):
         raise ValueError('Invalid browser session.')
     if 'restore' in command and (action != 'open' or not isinstance(command['restore'], bool)):
         raise ValueError('Restore is only available for opening a task window.')
-    if action in {'open', 'focus'} and 'session' not in command:
+    if action in {'open', 'focus', 'close'} and 'session' not in command:
         raise ValueError('Use --run to select an isolated task window.')
     if action == 'project' and 'session' in command:
         raise ValueError('Use open for an isolated task; never reset its conversation.')
@@ -94,7 +96,7 @@ def validate(command, cfg):
         if (p.scheme != 'https' or p.netloc != 'chatgpt.com' or p.query or p.fragment or
                 not re.fullmatch('/g/' + re.escape(key) + r'(?:-[^/]+)?/(?:project|c/[A-Za-z0-9-]+)', p.path)):
             raise ValueError('Expected URL must belong to the configured project.')
-    if action in {'compose', 'send', 'reply', 'reply-status'}:
+    if action in {'compose', 'send', 'reply', 'reply-status', 'close'}:
         if not isinstance(command.get('text'), str) or not command['text'].strip() or len(command['text'].encode()) > 65536:
             raise ValueError('Provide nonempty text up to 64 KB.')
         # The final pair is the current handoff; quoted older rounds may precede it.
@@ -230,7 +232,7 @@ def main():
         command = sub.add_parser(name)
         if name == 'open': command.add_argument('--restore', action='store_true', help='Explicitly restore a closed/unverified task window from its saved conversation URL.')
         command.add_argument('--run', type=Path, help='Route exclusively to this task window.')
-        if name != 'project': command.add_argument('--expect-url', required=name not in {'status', 'open'})
+        if name != 'project': command.add_argument('--expect-url', required=name not in {'status', 'open', 'close'})
         if name in {'compose', 'send', 'reply', 'reply-status', 'attach'}: command.add_argument('--file', type=Path, required=True)
         command.add_argument('--out', type=Path, required=True)
         command.add_argument('--timeout', type=int, default=45)
@@ -262,11 +264,15 @@ def main():
             cmd['session'] = session_key(args.run)
         if args.action == 'open' and args.restore:
             cmd['restore'] = True
-        if args.action == 'open' and not args.expect_url and args.run:
+        if args.action in {'open', 'close'} and not args.expect_url and args.run:
             state = json.loads((args.run / 'state.json').read_text())
             args.expect_url = state.get('conversation_url') or state['project_url']
         if args.action != 'project' and args.expect_url: cmd['expected_url'] = args.expect_url
         if args.action in {'compose', 'send', 'reply', 'reply-status'}: cmd['text'] = args.file.read_text()
+        if args.action == 'close':
+            if not args.run: raise ValueError('Use --run for window cleanup.')
+            state = json.loads((args.run / 'state.json').read_text())
+            cmd['text'] = (args.run / state['rounds'][-1]['outgoing']).read_text()
         if args.action == 'attach':
             f = args.file.resolve(strict=True)
             if not f.is_file() or not 0 < f.stat().st_size <= 8 * 1024 * 1024: raise ValueError('Select a file up to 8 MiB; summarize larger inputs.')
