@@ -47,7 +47,25 @@ async function taskTab(session, cfg, info) {
   try { tab = await chrome.tabs.get(saved.tabId); }
   catch { throw fault('window_closed','该任务窗口已关闭；其他任务不受影响，请恢复本任务绑定。'); }
   if (saved.windowId !== undefined && saved.windowId !== tab.windowId) throw fault('window_changed','任务标签页已移入其他窗口，请核对本任务绑定。');
-  if (!(tab.url && inProject(tab.url, info.project_key)) && !(tab.status === 'loading' && tab.pendingUrl && inProject(tab.pendingUrl, info.project_key))) throw fault('page_unavailable','任务窗口需要登录、验证或返回已配置项目。');
+  if (!(tab.url && inProject(tab.url, info.project_key)) && !(tab.status === 'loading' && tab.pendingUrl && inProject(tab.pendingUrl, info.project_key))) {
+    // The unified ChatGPT UI redirects project entry pages to / and project
+    // conversations to /c/id. Keep the saved project URL as a canonical alias.
+    const actual = new URL(tab.url || 'https://invalid.invalid');
+    const entry = saved.entryUrl && new URL(saved.entryUrl);
+    const conversation = entry?.pathname.match(/\/c\/([A-Za-z0-9-]+)$/)?.[1];
+    const redirected = actual.origin === 'https://chatgpt.com' && !actual.search && !actual.hash &&
+      entry && inProject(saved.entryUrl,info.project_key) &&
+      (conversation ? actual.pathname === '/c/' + conversation : actual.pathname === '/');
+    if (!redirected) throw fault('page_unavailable','任务窗口需要登录、验证或返回已配置项目。');
+    if (!conversation) {
+      const context = await pageCommand(tab.id,{type:'selfguide-command',command:{action:'project-context',
+        project_key:info.project_key,project_name:saved.projectName || null}});
+      if (!context.project_verified) throw fault(context.code || 'project_unverified',context.error || '无法确认项目选择。');
+      if (!saved.projectName) await chrome.storage.local.set({[SESSION+session]:{...saved,projectName:context.project_name}});
+      tab.selfguideProjectName = context.project_name;
+    }
+    tab.selfguideCanonical = saved.entryUrl;
+  }
   return tab;
 }
 async function layoutTaskWindows(cfg) {
@@ -85,7 +103,7 @@ async function openWindow(command, cfg, info, jobId) {
       const tab = await taskTab(session, cfg, info);
       await layoutTaskWindows(cfg);
       return {window_opened:true,reused:true,session,tab_id:tab.id,window_id:tab.windowId,
-        url:cleanURL(tab.url && inProject(tab.url,info.project_key) ? tab.url : tab.pendingUrl)};
+        url:tab.selfguideCanonical || cleanURL(tab.url && inProject(tab.url,info.project_key) ? tab.url : tab.pendingUrl)};
     } catch (error) {
       if (!command.restore || !['window_closed','session_not_open'].includes(error.code)) throw error;
       if (!/\/c\//.test(command.expected_url)) throw Error('恢复需要已登记的会话地址；新会话发送情况未确认时先处理原操作。');
@@ -97,7 +115,7 @@ async function openWindow(command, cfg, info, jobId) {
   const window = await chrome.windows.create({url:command.expected_url,type:'normal',focused:false});
   const tabs = window.tabs || await chrome.tabs.query({windowId:window.id});
   if (tabs.length !== 1 || tabs[0].id === undefined) throw Error('新窗口的标签页未确认，请检查原 open 操作。');
-  await chrome.storage.local.set({[key]:{state:'ready',tabId:tabs[0].id,windowId:window.id}});
+  await chrome.storage.local.set({[key]:{state:'ready',tabId:tabs[0].id,windowId:window.id,entryUrl:command.expected_url}});
   await layoutTaskWindows(cfg);
   return {window_opened:true,reused:false,session,tab_id:tabs[0].id,window_id:window.id,url:command.expected_url};
 }
@@ -120,10 +138,10 @@ async function execute(cfg, info, job) {
           }
           if (tab) {
             if (tab.status === 'loading') throw fault('window_busy','任务页面仍在加载，保留窗口。');
-            const state = await pageCommand(tab.id,{type:'selfguide-command',id:job.id,command:job.command});
+            const state = await pageCommand(tab.id,{type:'selfguide-command',id:job.id,command:{...job.command,...(tab.selfguideCanonical ? {project_alias:tab.selfguideCanonical} : {})}});
             if (!state.close_ready) throw fault(state.code || 'window_busy',state.error || '窗口尚未确认可关闭。');
             const current = await chrome.tabs.get(tab.id);
-            if (current.url !== job.command.expected_url || current.windowId !== saved.windowId) throw fault('window_changed','窗口地址或归属已改变，保留窗口。');
+            if (current.url !== tab.url || (tab.selfguideCanonical || current.url) !== job.command.expected_url || current.windowId !== saved.windowId) throw fault('window_changed','窗口地址或归属已改变，保留窗口。');
             const windows = await chrome.windows.getAll({windowTypes:['normal']});
             if (windows.length === 1 && (await chrome.tabs.query({windowId:current.windowId})).length === 1) {
               throw fault('last_browser_window','保留最后一个浏览器窗口，让连接继续运行。');
@@ -141,7 +159,7 @@ async function execute(cfg, info, job) {
     } else {
       const tab = await taskTab(session, cfg, info);
       if (job.command.action === 'focus') {
-        if (cleanURL(tab.url) !== job.command.expected_url) throw fault('wrong_page','任务地址不同，未切换窗口。');
+        if ((tab.selfguideCanonical || cleanURL(tab.url)) !== job.command.expected_url) throw fault('wrong_page','任务地址不同，未切换窗口。');
         await chrome.windows.update(tab.windowId,{focused:true});
         await chrome.tabs.update(tab.id,{active:true});
         result = {focused:true,session,url:cleanURL(tab.url)};
@@ -155,7 +173,18 @@ async function execute(cfg, info, job) {
         await chrome.tabs.update(tab.id,{url:job.project_url});
         result = {navigated:true,url:job.project_url,next:'Read compact status until the composer is ready.'};
       } else {
-        result = await pageCommand(tab.id,{type:'selfguide-command',id:job.id,command:job.command});
+        result = await pageCommand(tab.id,{type:'selfguide-command',id:job.id,command:{...job.command,
+          ...(tab.selfguideCanonical ? {project_alias:tab.selfguideCanonical,project_name:tab.selfguideProjectName} : {})}});
+        if (tab.selfguideCanonical && result.url) {
+          const physical = new URL(result.url);
+          const id = physical.pathname.match(/^\/c\/([A-Za-z0-9-]+)$/)?.[1];
+          const canonical = id ? 'https://chatgpt.com/g/' + info.project_key + '/c/' + id : tab.selfguideCanonical;
+          result = {...result,page_url:result.url,url:canonical};
+          if (result.sent && id) {
+            const saved = await binding(session,cfg);
+            await chrome.storage.local.set({[SESSION+session]:{...saved,entryUrl:canonical}});
+          }
+        }
       }
     }
   } catch (error) {

@@ -2,6 +2,7 @@
 
 先读具体结构化错误与 `session.py status --run <run> --brief`，按路径读取最新交接或检查记录。只有需要追溯时才读取完整状态（省略 `--brief`），不要把全部轮次反复读进上下文。
 
+- 项目入口跳到首页：新版页面通过项目选择器的项目 ID 确认归属；检查结果的 `url` 是用于恢复的项目地址，`page_url` 是浏览器实际地址。不要把普通首页当作已绑定项目。
 - 页面 `waiting/page_loading` 或正在生成：保留原等待进程，不截图。watcher 超时加 `--resume`；登录等阻塞处理完后也用它继续。
 - 不确定是否发送／上传成功：查 `bridge.py job <ID>`。不要重复提交同一操作。仍未确定时保持原任务状态；需要暂停可用 `session.py checkpoint --phase paused --run <run> --note-file <说明>`，恢复用 `session.py resume --run <run>`。
 - 普通小型状态不足时，可用 `bridge.py snapshot` 获取文本诊断；它包含最近消息与草稿，只在此时使用。

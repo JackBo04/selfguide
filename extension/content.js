@@ -78,8 +78,14 @@
       notices:[...document.querySelectorAll('[role="alert"]')].filter(visible).map(el=>text(el).slice(0,300)).slice(-3)};
   }
   function requirePage(command, needsEditor = true) {
+    const expected = command.expected_url;
+    const conversation = expected?.match(/\/c\/([A-Za-z0-9-]+)$/)?.[1];
+    const project = document.querySelector('[data-composer-navigation-target="workspace-project"]');
+    const alias = command.project_alias === expected && expected &&
+      (conversation ? location.pathname === '/c/' + conversation : location.pathname === '/' &&
+        command.project_name && text(project).trim() === command.project_name);
     if (location.origin !== 'https://chatgpt.com' || location.search || location.hash ||
-        (command.expected_url && location.href !== command.expected_url)) throw fault('wrong_page','页面地址不符，未执行。');
+        (expected && location.href !== expected && !alias)) throw fault('wrong_page','页面地址不符，未执行。');
     if (needsEditor && !editor()) {
       const retry = retryPage();
       throw fault(retry ? 'page_render_failed' : 'page_unavailable', retry
@@ -124,6 +130,30 @@
     }
     requirePage(command, command.action !== 'snapshot');
     const e = editor();
+    if (command.action === 'project-context') {
+      if (location.pathname !== '/' || !/^g-p-[A-Za-z0-9]+$/.test(command.project_key || '')) throw fault('project_unverified','不是项目新对话页面。');
+      const selector = document.querySelector('[data-composer-navigation-target="workspace-project"]');
+      if (!visible(selector)) throw fault('project_unverified','项目选择器不可用。');
+      if (command.project_name) {
+        if (text(selector).trim() !== command.project_name) throw fault('project_unverified','项目选择已改变。');
+        return {project_verified:true,project_name:command.project_name};
+      }
+      if (norm(draftText(e)) || userMessages().length || assistantMessages().length || stop() || attachments().length) throw fault('project_unverified','已有内容，未更改项目。');
+      if (selector.getAttribute('aria-expanded') !== 'true') selector.click();
+      const end = Date.now()+3000;
+      let option;
+      while (Date.now()<end) {
+        option = [...document.querySelectorAll('[role="option"][data-value]')].find(el=>visible(el) && el.getAttribute('data-value')===command.project_key);
+        if (option) break;
+        await pause(100);
+      }
+      if (!option) throw fault('project_unverified','项目列表中未找到配置的项目 ID。');
+      const name = text(option).trim();
+      option.click();
+      await pause(200);
+      if (!name || text(document.querySelector('[data-composer-navigation-target="workspace-project"]')).trim()!==name) throw fault('project_unverified','项目选择未确认。');
+      return {project_verified:true,project_name:name};
+    }
     if (command.action === 'status') return compact();
     if (command.action === 'snapshot') return snapshot(); // Explicit diagnostic only.
     if (command.action === 'close') {
