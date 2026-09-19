@@ -11,7 +11,7 @@ import {createRequire} from 'node:module';
 import {fixture} from './browser_fixture.mjs';
 const require=createRequire(process.env.SELFGUIDE_TEST_MODULE_ROOT || import.meta.url);
 const {chromium}=require('playwright');
-const modernFixture=fixture.replace("'/g/g-p-fixture-selfguide/c/'","'/c/'")+`<button data-composer-navigation-target="workspace-project" aria-expanded="false">selfguide</button><div role="option" data-value="g-p-fixture" hidden>selfguide</div><script>const selector=document.querySelector('[data-composer-navigation-target]'),option=document.querySelector('[role=option]');selector.onclick=()=>{option.hidden=false;selector.setAttribute('aria-expanded','true')};option.onclick=()=>{selector.textContent=option.textContent;option.hidden=true;selector.setAttribute('aria-expanded','false')};history.replaceState({},'',location.pathname.includes('/c/')?'/c/'+location.pathname.split('/').pop():'/');</script>`;
+const modernFixture=fixture.replaceAll('[data-testid=send-button]','button[aria-label=Send]').replace('type="button" data-testid="send-button"','type="submit" aria-label="Send"').replace('<form>','<form onsubmit="event.preventDefault()">').replace("'/g/g-p-fixture-selfguide/c/'","'/c/'")+`<button data-composer-navigation-target="workspace-project" aria-expanded="false">selfguide</button><div role="option" data-value="g-p-fixture" hidden>selfguide</div><script>const selector=document.querySelector('[data-composer-navigation-target]'),option=document.querySelector('[role=option]');selector.onclick=()=>{option.hidden=false;selector.setAttribute('aria-expanded','true')};option.onclick=()=>{selector.textContent=option.textContent;option.hidden=true;selector.setAttribute('aria-expanded','false')};history.replaceState({},'',location.pathname.includes('/c/')?'/c/'+location.pathname.split('/').pop():'/');</script>`;
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'selfguide-multi-test-'));
 const project='https://chatgpt.com/g/g-p-fixture/project';
@@ -85,6 +85,9 @@ try {
  const created=context.waitForEvent('page');const restored=await command(a,'open',{restore:true});a.page=await created;await a.page.goto(a.url);await a.page.waitForSelector('#prompt-textarea');
  assert.equal(restored.window_opened,true);assert.equal((await command(a,'status')).composer,true);
  assert.equal(await a.page.evaluate(()=>location.pathname),'/c/modern');
+ const rejected=await newTask('rejected');await command(rejected,'status');await command(rejected,'compose',{text:rejected.text});
+ await rejected.page.evaluate(()=>{document.querySelector('button[aria-label=Send]').onclick=()=>{window.sendClicks=(window.sendClicks||0)+1;const a=document.createElement('div');a.setAttribute('role','alert');a.textContent='Unknown error';document.body.append(a);history.replaceState({},'','/g/g-p-fixture/c/local-chatgpt%3Atemporary');};});
+ const failure=await command(rejected,'send',{text:rejected.text},true);assert.equal(failure.code,'website_rejected');assert.equal(failure.sent,undefined);assert.equal(await rejected.page.evaluate(()=>window.sendClicks),1);
  console.log('PASS: project ID selection, root URL alias, unchanged-project guard, DOM send/reply, exact conversation routing and restore.');
 } finally {
  if(context)await context.close();broker.kill('SIGTERM');await fs.rm(tmp,{recursive:true,force:true});

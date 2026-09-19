@@ -47,8 +47,8 @@
     });
   };
   const button = selectors => [...document.querySelectorAll(selectors)].find(visible);
-  const stop = () => button('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="停止生成"]');
-  const sendButton = () => button('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="发送提示"],button[aria-label="发送消息"]');
+  const stop = () => button('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="停止生成"],form button[aria-label="Stop"]');
+  const sendButton = () => button('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="发送提示"],button[aria-label="发送消息"],form button[type="submit"][aria-label="Send"]');
   const enabled = el => !!el && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
   function composer() { const e = editor(); return e?.closest('form') || e?.parentElement?.parentElement; }
   function attachments() {
@@ -74,7 +74,7 @@
       .map(el => text(el).trim()).filter(value => /^(Extra High|xhigh|Pro)$/i.test(value));
     return {status:'ready',url:location.origin + location.pathname,composer:!!e,draft_present:!!norm(draftText(e)),
       generating:!!stop(),user_count:userMessages().length,assistant_count:assistantMessages().length,
-      attachments:attachments(),thinking_label:labels.length === 1 ? labels[0] : null,
+      attachments:attachments(),thinking_label:document.querySelector('[data-selected-reasoning-effort="xhigh"]') ? 'Extra High' : labels.length === 1 ? labels[0] : null,
       notices:[...document.querySelectorAll('[role="alert"]')].filter(visible).map(el=>text(el).slice(0,300)).slice(-3)};
   }
   function requirePage(command, needsEditor = true) {
@@ -200,7 +200,10 @@
       const deadline = Date.now() + 20000;
       while (Date.now() < deadline) {
         const state = snapshot();
-        if (state.user_count > baseline && userMatches(userMessages().at(-1),command.text) && /\/c\//.test(state.url)) return {sent:true,url:state.url,user_count:state.user_count};
+        if (state.notices.some(notice => /^Unknown error$/i.test(notice.trim()))) {
+          throw fault('website_rejected','网页返回 Unknown error，发送未确认；检查网站登录或验证状态，勿自动重发。');
+        }
+        if (state.user_count > baseline && userMatches(userMessages().at(-1),command.text) && /\/c\/[A-Za-z0-9-]+$/.test(state.url)) return {sent:true,url:state.url,user_count:state.user_count};
         await pause(300);
       }
       throw Error('发送结果未确认；检查网页和任务记录，不能直接重发。');

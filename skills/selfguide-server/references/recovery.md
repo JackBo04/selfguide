@@ -5,6 +5,7 @@
 - 项目入口跳到首页：新版页面通过项目选择器的项目 ID 确认归属；检查结果的 `url` 是用于恢复的项目地址，`page_url` 是浏览器实际地址。不要把普通首页当作已绑定项目。
 - 页面 `waiting/page_loading` 或正在生成：保留原等待进程，不截图。watcher 超时加 `--resume`；登录等阻塞处理完后也用它继续。
 - 桥接可达但打开命令一直未领取：先查 `browserctl.py status`。浏览器退出时，使用原配置执行 `browserctl.py start`，保留登录目录；确认原 job 已过期且未领取后，才能重新打开原任务。只有网页实际要求登录或验证时才请用户接手。
+- `website_rejected`／网页 `Unknown error`：停止重复发送，保留原正文与 job。`local-chatgpt%3A…` 是临时地址，不是成功创建的服务器会话。若诊断确认 HTTP 403 且 `cf-mitigated: challenge`，需要网站验证恢复；主页有输入框并不代表请求已恢复。
 - 不确定是否发送／上传成功：查 `bridge.py job <ID>`。不要重复提交同一操作。仍未确定时保持原任务状态；需要暂停可用 `session.py checkpoint --phase paused --run <run> --note-file <说明>`，恢复用 `session.py resume --run <run>`。
 - 普通小型状态不足时，可用 `bridge.py snapshot` 获取文本诊断；它包含最近消息与草稿，只在此时使用。
 - `page_render_failed` 表示网页显示重试页且没有输入框。核对原 job，确认本窗口没有未确认发送、草稿或上传后，只刷新这个窗口；不要借用别的任务窗口。消息关联校验失败时，使用本任务当前 `prepare` 产物，不改任务 ID 来绕过检查。
