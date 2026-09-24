@@ -14,6 +14,7 @@ import bridge
 
 
 def save(path, value):
+    value['updated_at'] = time.time()
     temp = path.with_suffix(path.suffix+'.tmp')
     temp.write_text(json.dumps(value, ensure_ascii=False, indent=2)+'\n')
     temp.replace(path)
@@ -93,6 +94,8 @@ def run(args):
             state['polls'] += 1
             if job['state'] == 'done':
                 result = job.get('result') or {}
+                state.update(last_browser_response_at=time.time(),
+                             last_browser_reason=result.get('reason') or result.get('code') or result.get('status'))
                 if result.get('status') == 'ready' and result.get('complete') and result.get('url') == args.expect_url and result.get('text','').strip():
                     selected = result.get('handoff_text') or result['text']
                     state.update(state='saving',reason=None,source='dom',reply_sha256=digest(selected),

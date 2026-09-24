@@ -103,7 +103,11 @@ try {
  await b.page.evaluate(()=>window.replyDelay=300);
  for(const t of [a,b])session('submitting','--run',t.run);
  const sent=await Promise.all([command(a,'send',{text:a.text}),command(b,'send',{text:b.text})]);
- for(const [i,t] of [a,b].entries()){assert.equal(sent[i].sent,true);t.url=sent[i].url;session('sent','--run',t.run,'--url',t.url);}
+ for(const [i,t] of [a,b].entries()){
+  assert.equal(sent[i].submitted,true);t.url=sent[i].url;
+  if(sent[i].sent)session('sent','--run',t.run,'--url',t.url);
+  else {assert.equal(sent[i].confirmation,'ui_only');assert.equal(session('status','--run',t.run).phase,'send_pending');}
+ }
  const waitingA=watch(a),doneB=await watch(b);
  assert.equal(doneB.code,0,doneB.stderr);
  assert.equal(await a.page.locator('[data-testid=stop-button]').count(),1,'B should finish while A is still generating');
@@ -111,6 +115,7 @@ try {
  for(const [t,other] of [[a,b],[b,a]]){
   const reply=await fs.readFile(path.join(t.run,'feedback/dom.txt'),'utf8');
   assert.ok(reply.includes(t.marker));assert.ok(!reply.includes(other.marker));
+  if(session('status','--run',t.run).phase==='send_pending')session('sent','--run',t.run,'--url',t.url);
   session('reply','--run',t.run,'--file',path.join(t.run,'feedback/dom.txt'),'--source','dom');
  }
  const crossed=await command(a,'status',{expected_url:b.url},true);assert.equal(crossed.code,'wrong_page');

@@ -3,6 +3,7 @@
 先读具体结构化错误与 `session.py status --run <run> --brief`，按路径读取最新交接或检查记录。只有需要追溯时才读取完整状态（省略 `--brief`），不要把全部轮次反复读进上下文。
 
 - 项目入口跳到首页：新版页面通过项目选择器的项目 ID 确认归属；检查结果的 `url` 是用于恢复的项目地址，`page_url` 是浏览器实际地址。不要把普通首页当作已绑定项目。
+- 等待迟迟无结果：`last_browser_response_at` 和 `last_browser_reason` 表示最近实际网页回执，`updated_at` 表示进度写入时间。`awaiting_response` 仅有占位状态，不能断言服务器仍在生成；结合进程状态与单次文本诊断排查。界面出现本轮气泡也不等于发送已确认。
 - 页面 `waiting/page_loading` 或正在生成：保留原等待进程，不截图。watcher 超时加 `--resume`；登录等阻塞处理完后也用它继续。
 - `website_rejected`／网页 `Unknown error`：停止重复发送，保留原正文与 job。`local-chatgpt%3A…` 是临时地址，不是成功创建的服务器会话。若诊断确认 HTTP 403 且 `cf-mitigated: challenge`，需要网站验证恢复；主页有输入框并不代表请求已恢复。
 - 不确定是否发送／上传成功：查 `bridge.py job <ID>`。不要重复提交同一操作。仍未确定时保持原任务状态；需要暂停可用 `session.py checkpoint --phase paused --run <run> --note-file <说明>`，恢复用 `session.py resume --run <run>`。

@@ -93,11 +93,19 @@
         : '没有找到聊天输入框；可能需要手动登录、验证或适配网页。');
     }
   }
+  function currentResponse(lastUser) {
+    const last = assistantMessages().at(-1);
+    if (!lastUser || !last || !(lastUser.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING)) return null;
+    // The UI inserts a user bubble, a stop button and "Thinking" before the
+    // request has been accepted. These placeholders are not a server receipt.
+    const value = text(last).trim();
+    return value && !/^(Thinking|Thinking[.\u2026]*|正在思考[.\u2026]*|思考中[.\u2026]*)$/i.test(value) ? last : null;
+  }
   function replyCandidate(command) {
     requirePage(command);
     const lastUser = userMessages().at(-1), last = assistantMessages().at(-1);
     if (!userMatches(lastUser, command.text || '')) throw fault('turn_mismatch','最近用户消息与本轮不同，未读取正文。');
-    if (stop()) return {status:'waiting',reason:'generating'};
+    if (stop()) return {status:'waiting',reason:currentResponse(lastUser) ? 'generating' : 'awaiting_response'};
     if (!last || !(lastUser.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING)) return {status:'waiting',reason:'no_current_reply'};
     const turn = last.closest('article,[data-testid^="conversation-turn-"],.agent-turn') || last.parentElement;
     const copy = [...(turn?.querySelectorAll('[data-testid="copy-turn-action-button"],button[aria-label="Copy response"],button[aria-label="复制回复"]') || [])]
@@ -203,8 +211,15 @@
         if (state.notices.some(notice => /^Unknown error$/i.test(notice.trim()))) {
           throw fault('website_rejected','网页返回 Unknown error，发送未确认；检查网站登录或验证状态，勿自动重发。');
         }
-        if (state.user_count > baseline && userMatches(userMessages().at(-1),command.text) && /\/c\/[A-Za-z0-9-]+$/.test(state.url)) return {sent:true,url:state.url,user_count:state.user_count};
+        if (state.user_count > baseline && userMatches(userMessages().at(-1),command.text) && /\/c\/[A-Za-z0-9-]+$/.test(state.url) && currentResponse(userMessages().at(-1))) {
+          return {sent:true,submitted:true,confirmation:'assistant_content',url:state.url,user_count:state.user_count};
+        }
         await pause(300);
+      }
+      const state = snapshot();
+      if (state.user_count > baseline && userMatches(userMessages().at(-1),command.text) && /\/c\/[A-Za-z0-9-]+$/.test(state.url)) {
+        return {status:'waiting',reason:'awaiting_response',submitted:true,sent:false,
+          confirmation:'ui_only',url:state.url,user_count:state.user_count};
       }
       throw Error('发送结果未确认；检查网页和任务记录，不能直接重发。');
     }

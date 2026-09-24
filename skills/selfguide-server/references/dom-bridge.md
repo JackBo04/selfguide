@@ -22,7 +22,9 @@ python <skill>/scripts/wait_reply.py --run <run> --file <run>/messages/out-001.t
 python <skill>/scripts/session.py reply --run <run> --file <run>/feedback/copied-001.txt --source dom
 ```
 
-发送 `prepare` 生成的文件，它已追加本轮交接标记。`compose` 须返回 `draft_verified:true`，`send` 须返回 `sent:true`；结果不明先查原 job，不能重发。`send_pending` 不代表发送失败。
+发送 `prepare` 生成的文件，它已追加本轮交接标记。`compose` 须返回 `draft_verified:true`，`send` 返回 `sent:true` 后才登记 `session.py sent`；只显示本地气泡时按下面的分支等待。结果不明先查原 job，不能重发。`send_pending` 不代表发送失败。
+
+若 `send` 返回 `submitted:true, sent:false, confirmation:ui_only`，只证明页面出现本轮消息。保留 `send_pending`，用返回的会话 URL 运行同一个 `wait_reply.py`；取得完整匹配回复后再依次执行 `session.py sent` 和 `session.py reply`，不要重发。只有 `Thinking` 或停止按钮时，不能报告网页已收到材料或正在写正文。
 
 `wait_reply.py` 自行等待完整回复，不需要模型轮询页面。终端每次最多等 55 秒；原进程未结束时保留它，不另启 watcher。正常等待不读状态文件、不截图；超时退出码 3 时用原参数加 `--resume`；退出码 2 时读 [恢复](recovery.md)。
 

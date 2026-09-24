@@ -85,6 +85,19 @@ try {
  const created=context.waitForEvent('page');const restored=await command(a,'open',{restore:true});a.page=await created;await a.page.goto(a.url);await a.page.waitForSelector('#prompt-textarea');
  assert.equal(restored.window_opened,true);assert.equal((await command(a,'status')).composer,true);
  assert.equal(await a.page.evaluate(()=>location.pathname),'/c/modern');
+ const optimistic=await newTask('optimistic');await command(optimistic,'status');await command(optimistic,'compose',{text:optimistic.text});
+ await optimistic.page.evaluate(()=>{document.querySelector('button[aria-label=Send]').onclick=()=>{
+  window.sendClicks=(window.sendClicks||0)+1;
+  const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=document.querySelector('textarea').value;document.querySelector('main').append(user);
+  const assistant=document.createElement('div');assistant.dataset.messageAuthorRole='assistant';assistant.textContent='Thinking';document.querySelector('main').append(assistant);
+  const stop=document.createElement('button');stop.dataset.testid='stop-button';document.body.append(stop);
+  document.querySelector('textarea').value='';history.replaceState({},'','/c/optimistic');
+ };});
+ const unconfirmed=await command(optimistic,'send',{text:optimistic.text});assert.equal(unconfirmed.sent,false);assert.equal(unconfirmed.submitted,true);assert.equal(unconfirmed.confirmation,'ui_only');assert.equal(await optimistic.page.evaluate(()=>window.sendClicks),1);
+ optimistic.url=unconfirmed.url;assert.equal((await command(optimistic,'reply-status',{text:optimistic.text})).reason,'awaiting_response');
+ // A reload can lose a purely optimistic user bubble. Never collect the previous round instead.
+ await optimistic.page.evaluate(()=>{document.querySelector('main').innerHTML='';document.querySelector('[data-testid=stop-button]').remove();});
+ assert.equal((await command(optimistic,'reply-status',{text:optimistic.text},true)).code,'turn_mismatch');
  const rejected=await newTask('rejected');await command(rejected,'status');await command(rejected,'compose',{text:rejected.text});
  await rejected.page.evaluate(()=>{document.querySelector('button[aria-label=Send]').onclick=()=>{window.sendClicks=(window.sendClicks||0)+1;const a=document.createElement('div');a.setAttribute('role','alert');a.textContent='Unknown error';document.body.append(a);history.replaceState({},'','/g/g-p-fixture/c/local-chatgpt%3Atemporary');};});
  const failure=await command(rejected,'send',{text:rejected.text},true);assert.equal(failure.code,'website_rejected');assert.equal(failure.sent,undefined);assert.equal(await rejected.page.evaluate(()=>window.sendClicks),1);

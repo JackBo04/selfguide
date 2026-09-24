@@ -46,6 +46,21 @@ class WaitReplyTest(unittest.TestCase):
         state=json.loads(self.args.out.read_text());self.assertFalse(state['screenshot_recommended'])
         self.assertNotIn('PRIVATE PARTIAL',self.args.out.read_text()+output)
         self.assertTrue(all(body['command']['action']=='reply-status' for route,body in self.calls if route=='/command'))
+    def test_last_browser_reply_survives_pending_probe(self):
+        jobs = 0
+        def request(route, body):
+            nonlocal jobs
+            if route != '/job': return {'id': body['id']}
+            jobs += 1
+            return {'state':'done','result':{'status':'waiting','reason':'awaiting_response'}} if jobs == 1 else {'state':'claimed'}
+        with patch.object(waiter.bridge,'config',return_value={'project_url':'https://chatgpt.com/g/g-p-test/project'}), patch.object(waiter.bridge,'request',side_effect=request), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(waiter.run(self.args),3)
+        state=json.loads(self.args.out.read_text())
+        self.assertEqual(state['last_browser_reason'],'awaiting_response')
+        self.assertEqual(state['reason'],'awaiting_browser')
+        self.assertGreaterEqual(state['updated_at'],state['last_browser_response_at'])
+        self.assertFalse(self.args.reply_out.exists())
+
     def test_resume_cannot_switch_to_another_window(self):
         task=self.root/'task';task.mkdir()
         state={'id':'task-a','rounds':[{'outgoing_sha256':hashlib.sha256(self.prompt.read_bytes()).hexdigest()}]}

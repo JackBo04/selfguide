@@ -180,7 +180,7 @@ async function execute(cfg, info, job) {
           const id = physical.pathname.match(/^\/c\/([A-Za-z0-9-]+)$/)?.[1];
           const canonical = id ? 'https://chatgpt.com/g/' + info.project_key + '/c/' + id : tab.selfguideCanonical;
           result = {...result,page_url:result.url,url:canonical};
-          if (result.sent && id) {
+          if ((result.sent || result.submitted) && id) {
             const saved = await binding(session,cfg);
             await chrome.storage.local.set({[SESSION+session]:{...saved,entryUrl:canonical}});
           }
